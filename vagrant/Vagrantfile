@@ -1,0 +1,41 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+
+# Vagrantfile API/syntax version. Don't touch unless you know what you're doing!
+VAGRANTFILE_API_VERSION = "2"
+
+Vagrant.configure(VAGRANTFILE_API_VERSION) do |config|
+
+    config.vm.provision "shell", inline: "echo devbox setup"
+
+    config.vm.define "devbox" do |devbox|
+
+        devbox.vm.box = "precise64"
+        devbox.vm.box_url = "http://files.vagrantup.com/precise64.box"
+
+        # Create a private network, which allows host-only access to the machine
+        # using a specific IP.
+        devbox.vm.network "private_network", ip: "192.168.100.1"
+
+        # If true, then any SSH connections made will enable agent forwarding.
+        # Default value: false
+        devbox.ssh.forward_agent = true
+
+        # Share an additional folder to the guest VM. The first argument is
+        # the path on the host to the actual folder. The second argument is
+        # the path on the guest to mount the folder. And the optional third
+        # argument is a set of non-required options.
+        devbox.vm.synced_folder "../shared_folder/", "/vagrant_data"
+
+        devbox.vm.hostname = "devbox"
+        devbox.ssh.guest_port = 22
+
+        devbox.vm.provision :puppet do |puppet|
+     		puppet.manifests_path = "manifests"
+     		puppet.manifest_file  = "init.pp"
+     		puppet.options = "--verbose --debug"
+   	    end
+
+    end
+
+end
