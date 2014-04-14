@@ -16,6 +16,11 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <arpa/inet.h>  /* for sockaddr_in and inet_addr() and inet_ntoa() */
+
 
 #include <itskylib.h>
 #include <hsort.h>
@@ -28,6 +33,8 @@
 
 const int LINE_SIZE = 200;
 const int THREAD_COUNT = 20;
+#define RCVBUFSIZE 32   /* Size of receive buffer */
+#define MAXPENDING 5    /* Maximum outstanding connection requests */
 
 pthread_once_t once = PTHREAD_ONCE_INIT;
 
@@ -47,6 +54,7 @@ struct thread_arg {
 void *thread_run(void *ptr);
 
 void print_sorted_words(struct thread_arg *arg);
+void *handle_tcp_client(void *client_socket_ptr); 
 
 void thread_once();
 
@@ -67,17 +75,26 @@ void usage(char *argv0, char *msg) {
   printf("%s -q file \n\tsorts contents of file using quicksort.\n\n", argv0);
   printf("%s -i file \n\tsorts contents of file using insertionsort.\n\n", argv0);
   printf("%s -m file \n\tsorts contents of file using mergesort.\n\n", argv0);
+  
+  printf("3rd argument is the port number. \n\n");
+
   exit(1);
 }
 
 int main(int argc, char *argv[]) {
   int retcode;
-  pthread_t *thread;
+
+  int server_socket; 
+  int client_socket; 
+  struct sockaddr_in server_address;
+  struct sockaddr_in client_address;
+  unsigned short server_port; 
+  unsigned int client_address_len;
   
   key = create_key();
 
   char *argv0 = argv[0];
-  if (argc != 3) {
+  if (argc != 4) {
     printf("found %d arguments\n", argc - 1);
     usage(argv0, "wrong number of arguments");
   }
@@ -116,13 +133,47 @@ int main(int argc, char *argv[]) {
   }
 
   char *file_name = argv[2];
+  
+  
+  /* Create socket for incoming connections */
+  server_port = atoi(argv[3]);  /* 3rd arg:  local port */
+  server_socket = socket(PF_INET, SOCK_STREAM, 0);
+  handle_error(server_socket, "socket() failed", PROCESS_EXIT);
+  
+   /* Construct local address structure */
+  memset(&server_address, 0, sizeof(server_address));   /* Zero out structure */
+  server_address.sin_family = AF_INET;                /* Internet address family */
+  server_address.sin_addr.s_addr = htonl(INADDR_ANY); /* Any incoming interface */
+  server_address.sin_port = htons(server_port);      /* Local port */
 
-  thread = (pthread_t *) malloc(THREAD_COUNT * sizeof(pthread_t));
+  /* Bind to the local address */
+  retcode = bind(server_socket, (struct sockaddr *) &server_address, sizeof(server_address));
+  handle_error(retcode, "bind() failed", PROCESS_EXIT);
+
+  /* Mark the socket so it will listen for incoming connections */
+  retcode = listen(server_socket, MAXPENDING);
+  handle_error(retcode, "listen() failed", PROCESS_EXIT);
+
   struct thread_arg *thread_data = (struct thread_arg *) malloc(THREAD_COUNT * sizeof(struct thread_arg));
 
   struct string_array **content = (struct string_array **)malloc(sizeof(struct string_array *));
-
-  for (int i = 0; i < THREAD_COUNT; i++) {
+  int i = 0;
+  while (TRUE) {
+  
+      client_address_len = sizeof(client_address);
+      printf("binding socket");
+      client_socket = accept(server_socket, (struct sockaddr *) &client_address, &client_address_len);
+      handle_error(client_socket, "accept() failed", PROCESS_EXIT);
+      printf("something happened on socket");
+      pthread_t thread;
+      int *client_socket_ptr = (int *) malloc(sizeof(int));
+      *client_socket_ptr = client_socket;
+      pthread_create(&thread, NULL, handle_tcp_client, client_socket_ptr);
+      pthread_detach(thread);
+  }
+  
+  /*
+    for (int i = 0; i < THREAD_COUNT; i++) {
     thread_data[i].file_name = file_name;
     thread_data[i].selected_sort_type = selected_sort_type;
     thread_data[i].content = content;
@@ -130,14 +181,30 @@ int main(int argc, char *argv[]) {
     retcode = pthread_create(&(thread[i]), NULL, thread_run, &(thread_data[i]));
     handle_thread_error(retcode, "pthread_create", PROCESS_EXIT);
   }
+  /*
+  //for (int i = 0; i < THREAD_COUNT; i++) {
+  //  /* printf("main: joining thread %d\n", i); */
+  //  retcode = pthread_join(thread[i], NULL);
+  //  handle_thread_error(retcode, "pthread_join", PROCESS_EXIT);
+  //  /* printf("main: joined thread %d\n", i); */
+  //}
+  
 
-  for (int i = 0; i < THREAD_COUNT; i++) {
-    /* printf("main: joining thread %d\n", i); */
-    retcode = pthread_join(thread[i], NULL);
-    handle_thread_error(retcode, "pthread_join", PROCESS_EXIT);
-    /* printf("main: joined thread %d\n", i); */
-  }
   exit(0);
+}
+
+void* handle_tcp_client(void *client_socket_ptr)
+{
+    printf("thread started");
+    int client_socket = *((int *) client_socket_ptr);
+    char *send_message = "sending message back to client";
+    int message_size = sizeof(char)*32;
+    ssize_t sent_size = send(client_socket, send_message, message_size, 0 );
+    if (sent_size != message_size) {
+      die_with_error("send() failed");
+    }
+    close(client_socket);    /* Close client socket */
+    return NULL;
 }
 
 void thread_once() {
